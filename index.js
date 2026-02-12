@@ -242,6 +242,30 @@ async function processStitchJob(
       throw new Error('No valid frames downloaded');
     }
     
+    // CRITICAL: Renumber frames sequentially to avoid gaps that break FFmpeg
+    // FFmpeg's image2 demuxer stops at the first missing frame number!
+    const frameFiles = await fs.readdir(framesDir);
+    const sortedFrames = frameFiles.filter(f => f.endsWith('.jpg')).sort();
+    
+    console.log(`[RENUMBER] Found ${sortedFrames.length} frame files, renumbering sequentially...`);
+    
+    for (let i = 0; i < sortedFrames.length; i++) {
+      const oldPath = `${framesDir}/${sortedFrames[i]}`;
+      const newPath = `${framesDir}/seq_${String(i + 1).padStart(5, '0')}.jpg`;
+      await fs.rename(oldPath, newPath);
+    }
+    
+    // Update frame count to actual downloaded frames
+    const actualFrameCount = sortedFrames.length;
+    console.log(`[RENUMBER] Renumbered ${actualFrameCount} frames (seq_00001.jpg to seq_${String(actualFrameCount).padStart(5, '0')}.jpg)`);
+    
+    // Recalculate frame rate based on actual frames to maintain correct duration
+    if (actualFrameCount !== totalFrames) {
+      console.log(`[WARNING] Frame count mismatch: expected ${totalFrames}, got ${actualFrameCount}`);
+      // Keep the same frame rate so video duration matches recording duration
+      // (fewer frames at same rate = proportionally shorter video, which is correct)
+    }
+    
     // Download audio chunks if needed
     let downloadedAudio = 0;
     if (options.hasAudio && stats.recordingStats.totalAudioChunks > 0) {
@@ -267,10 +291,11 @@ async function processStitchJob(
     
     console.log(`[STITCH] Creating video from frames...`);
     
-    // Verify frames exist
-    const frameFiles = await fs.readdir(framesDir);
-    console.log(`[DEBUG] Frames in directory: ${frameFiles.length}`);
-    console.log(`[DEBUG] First few frames: ${frameFiles.slice(0, 5).join(', ')}`);
+    // Verify renumbered frames exist
+    const seqFrameFiles = await fs.readdir(framesDir);
+    const seqFiles = seqFrameFiles.filter(f => f.startsWith('seq_'));
+    console.log(`[DEBUG] Renumbered frames in directory: ${seqFiles.length}`);
+    console.log(`[DEBUG] First few frames: ${seqFiles.slice(0, 5).join(', ')}`);
     
     const videoOutputPath = `${workDir}/video_only.mp4`;
     const audioOutputPath = `${workDir}/audio.wav`;
@@ -297,7 +322,7 @@ async function processStitchJob(
     // Step 1: Create video from frames with MEMORY OPTIMIZED settings
     await new Promise((resolve, reject) => {
       const command = ffmpeg()
-        .input(`${framesDir}/frame_%05d.jpg`)
+        .input(`${framesDir}/seq_%05d.jpg`)  // Use renumbered sequence files
         .inputOptions([
           '-framerate', String(frameRate),
           '-start_number', '1'
