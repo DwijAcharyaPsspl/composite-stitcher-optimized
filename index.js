@@ -268,8 +268,13 @@ async function processStitchJob(
     
     // Download audio chunks if needed
     let downloadedAudio = 0;
+    const missingAudioChunks = [];
     if (options.hasAudio && stats.recordingStats.totalAudioChunks > 0) {
       console.log(`[DOWNLOAD] Downloading ${stats.recordingStats.totalAudioChunks} audio chunks...`);
+      
+      // Calculate expected vs actual
+      const expectedChunksFor20s = Math.floor(durationSeconds * 10); // 10 chunks per second at 100ms
+      console.log(`[AUDIO DEBUG] Expected chunks for ${durationSeconds.toFixed(1)}s: ~${expectedChunksFor20s}, Metadata reports: ${stats.recordingStats.totalAudioChunks}`);
       
       for (let i = 1; i <= stats.recordingStats.totalAudioChunks; i++) {
         try {
@@ -278,15 +283,28 @@ async function processStitchJob(
           
           if (data) {
             const buffer = Buffer.from(await data.arrayBuffer());
-            await fs.writeFile(`${audioDir}/audio_chunk_${i}.wav`, buffer);
-            downloadedAudio++;
+            if (buffer.length > 0) {
+              await fs.writeFile(`${audioDir}/audio_chunk_${i}.wav`, buffer);
+              downloadedAudio++;
+            } else {
+              console.log(`[WARNING] Audio chunk ${i} is empty`);
+              missingAudioChunks.push(i);
+            }
+          } else {
+            console.log(`[WARNING] Audio chunk ${i} not found in storage`);
+            missingAudioChunks.push(i);
           }
         } catch (err) {
           console.error(`[ERROR] Audio chunk ${i}: ${err.message}`);
+          missingAudioChunks.push(i);
         }
       }
       
-      console.log(`[DOWNLOAD] Downloaded ${downloadedAudio} audio chunks`);
+      console.log(`[DOWNLOAD] Downloaded ${downloadedAudio}/${stats.recordingStats.totalAudioChunks} audio chunks`);
+      if (missingAudioChunks.length > 0) {
+        console.log(`[WARNING] Missing audio chunks: ${missingAudioChunks.slice(0, 20).join(', ')}${missingAudioChunks.length > 20 ? '...' : ''}`);
+        console.log(`[WARNING] Total missing: ${missingAudioChunks.length} chunks - this will cause audio gaps!`);
+      }
     }
     
     console.log(`[STITCH] Creating video from frames...`);
