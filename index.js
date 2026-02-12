@@ -119,7 +119,7 @@ app.post('/stitch', async (req, res) => {
 async function processStitchJob(
   sessionId, 
   bucket, 
-  frameRate, 
+  requestFrameRate, 
   sampleRate, 
   videoStorageFolder, 
   audioStorageFolder, 
@@ -152,7 +152,63 @@ async function processStitchJob(
     const statsText = await statsData.text();
     const stats = JSON.parse(statsText);
     
+    // DEBUG: Log full metadata for troubleshooting
+    console.log(`[METADATA DEBUG] ========================================`);
+    console.log(`[METADATA DEBUG] Raw metadata: ${statsText}`);
+    console.log(`[METADATA DEBUG] recordingStats.totalFrames: ${stats.recordingStats?.totalFrames}`);
+    console.log(`[METADATA DEBUG] recordingStats.totalAudioChunks: ${stats.recordingStats?.totalAudioChunks}`);
+    console.log(`[METADATA DEBUG] recordingStats.duration (ms): ${stats.recordingStats?.duration}`);
+    console.log(`[METADATA DEBUG] recordingStats.durationSeconds: ${stats.recordingStats?.durationSeconds}`);
+    console.log(`[METADATA DEBUG] stitchingInfo.targetFrameRate: ${stats.stitchingInfo?.targetFrameRate}`);
+    console.log(`[METADATA DEBUG] stitchingInfo.actualFrameRate: ${stats.stitchingInfo?.actualFrameRate}`);
+    console.log(`[METADATA DEBUG] Request frameRate: ${requestFrameRate}`);
+    console.log(`[METADATA DEBUG] ========================================`);
+    
     console.log(`[INFO] Frames: ${stats.recordingStats.totalFrames}, Audio chunks: ${stats.recordingStats.totalAudioChunks}`);
+    
+    // CRITICAL: Use the correct frame rate to ensure video duration matches recording duration
+    // Priority: 1) Pre-calculated actualFrameRate from metadata
+    //           2) Calculate from totalFrames / durationSeconds
+    //           3) Request frameRate
+    //           4) Default 5 fps
+    const totalFrames = stats.recordingStats.totalFrames;
+    const durationSeconds = stats.recordingStats.durationSeconds || (stats.recordingStats.duration / 1000);
+    const metadataActualFrameRate = stats.stitchingInfo?.actualFrameRate;
+    
+    let frameRate;
+    
+    // Priority 1: Use pre-calculated actualFrameRate from metadata (most reliable)
+    if (metadataActualFrameRate && metadataActualFrameRate > 0 && metadataActualFrameRate < 60) {
+      frameRate = metadataActualFrameRate;
+      console.log(`[FRAMERATE] Using metadata actualFrameRate: ${frameRate.toFixed(4)} fps`);
+    }
+    // Priority 2: Calculate from duration
+    else if (durationSeconds && durationSeconds > 0 && totalFrames > 0) {
+      frameRate = totalFrames / durationSeconds;
+      console.log(`[FRAMERATE] Calculated from metadata: ${totalFrames} frames / ${durationSeconds.toFixed(2)}s = ${frameRate.toFixed(4)} fps`);
+    }
+    // Priority 3: Use request frame rate
+    else if (requestFrameRate && requestFrameRate > 0 && requestFrameRate < 60) {
+      frameRate = requestFrameRate;
+      console.log(`[FRAMERATE] Using request frame rate: ${frameRate} fps`);
+    }
+    // Priority 4: Default fallback
+    else {
+      frameRate = 5;
+      console.log(`[FRAMERATE] WARNING: Could not determine frame rate, using default: ${frameRate} fps`);
+    }
+    
+    // Sanity check: frame rate should be reasonable (0.5 to 60 fps)
+    if (frameRate < 0.5) {
+      console.log(`[FRAMERATE] WARNING: Frame rate too low (${frameRate}), clamping to 0.5 fps`);
+      frameRate = 0.5;
+    } else if (frameRate > 60) {
+      console.log(`[FRAMERATE] WARNING: Frame rate too high (${frameRate}), clamping to 60 fps`);
+      frameRate = 60;
+    }
+    
+    console.log(`[FRAMERATE] Final frame rate: ${frameRate.toFixed(4)} fps`);
+    console.log(`[FRAMERATE] Expected video duration: ${(totalFrames / frameRate).toFixed(2)} seconds`);
     
     // MEMORY OPTIMIZATION: Download frames in smaller batches
     console.log(`[DOWNLOAD] Downloading ${stats.recordingStats.totalFrames} frames in batches...`);
