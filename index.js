@@ -335,26 +335,31 @@ async function processStitchJob(
     // Ensure even dimensions
     videoFilters.push('pad=ceil(iw/2)*2:ceil(ih/2)*2');
     
+    // Round frame rate to 4 decimal places to avoid FFmpeg parsing issues
+    const roundedFrameRate = Math.round(frameRate * 10000) / 10000;
+    
     console.log(`[FFMPEG] Video filters: ${videoFilters.join(', ')}`);
+    console.log(`[FFMPEG] Using frame rate: ${roundedFrameRate} fps (rounded from ${frameRate})`);
     
     // Step 1: Create video from frames with MEMORY OPTIMIZED settings
     await new Promise((resolve, reject) => {
       const command = ffmpeg()
         .input(`${framesDir}/seq_%05d.jpg`)  // Use renumbered sequence files
         .inputOptions([
-          '-framerate', String(frameRate),
+          `-framerate`, `${roundedFrameRate}`,
           '-start_number', '1'
         ])
         .videoCodec('libx264')
         .videoFilters(videoFilters)
         .outputOptions([
-          '-r', String(frameRate),    // CRITICAL: Set output frame rate to match input
+          '-vsync', 'cfr',                   // Constant frame rate
+          '-r', `${roundedFrameRate}`,       // Output frame rate
           '-pix_fmt', 'yuv420p',
-          '-preset', 'ultrafast',     // MEMORY: Much faster, less memory
-          '-crf', '28',               // MEMORY: Slightly lower quality, faster encoding
-          '-tune', 'fastdecode',      // MEMORY: Optimize for fast decoding
-          '-threads', '2',            // MEMORY: Limit threads to reduce memory
-          '-movflags', '+faststart'   // Enable streaming
+          '-preset', 'ultrafast',
+          '-crf', '28',
+          '-tune', 'fastdecode',
+          '-threads', '2',
+          '-movflags', '+faststart'
         ])
         .output(videoOutputPath)
         .on('start', cmd => console.log('[FFMPEG] Video command:', cmd))
@@ -396,12 +401,16 @@ async function processStitchJob(
       if (audioLines.length > 0) {
         await fs.writeFile(audioListPath, audioLines.join('\n'));
         
+        // Don't force sample rate - let FFmpeg detect from WAV headers
+        // This prevents chipmunk effect from sample rate mismatch
+        console.log(`[AUDIO] Concatenating ${audioLines.length} audio chunks (using native sample rate from WAV)`);
+        
         await new Promise((resolve, reject) => {
           ffmpeg()
             .input(audioListPath)
             .inputOptions(['-f', 'concat', '-safe', '0'])
             .audioCodec('pcm_s16le')
-            .audioFrequency(sampleRate || 44100)
+            // Don't set audioFrequency here - preserve original sample rate
             .audioChannels(1)
             .output(audioOutputPath)
             .on('start', cmd => console.log('[FFMPEG] Audio command:', cmd))
@@ -431,8 +440,8 @@ async function processStitchJob(
           .input(audioOutputPath)
           .videoCodec('copy')
           .audioCodec('aac')
-          .audioFrequency(sampleRate || 44100)
-          .audioBitrate('96k')  // Lower bitrate to save size
+          // Don't force audioFrequency - preserve from input
+          .audioBitrate('128k')
           .audioChannels(1)
           .outputOptions(['-shortest', '-movflags', '+faststart'])
           .output(finalOutputPath)
