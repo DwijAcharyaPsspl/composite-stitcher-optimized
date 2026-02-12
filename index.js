@@ -305,6 +305,7 @@ async function processStitchJob(
         .videoCodec('libx264')
         .videoFilters(videoFilters)
         .outputOptions([
+          '-r', String(frameRate),    // CRITICAL: Set output frame rate to match input
           '-pix_fmt', 'yuv420p',
           '-preset', 'ultrafast',     // MEMORY: Much faster, less memory
           '-crf', '28',               // MEMORY: Slightly lower quality, faster encoding
